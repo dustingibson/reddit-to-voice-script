@@ -46,11 +46,11 @@ def combineVoices(num, folderName):
         command += "[" + str(i) + ":0]"
     command += "concat=n=" + str(num)
     command += ":v=0:a=1[out]' -map '[out]' ALL.mp3"
-    print(command)
+    #$print(command)
     subprocess.call('C:/Windows/system32/WindowsPowerShell/v1.0/powershell.exe ' + command, shell=True)
     #os.system(command)
 
-def combineAllVoices(fnames, transitionFname):
+def combineAllVoices(fnames, transitionFname, mp3Fname):
     command = "ffmpeg -i " #sample1.mp3 -i sample2.mp3 -i sample3.mp3 -i sample4.mp3 -filter_complex '[0:0][1:0][2:0][3:0]concat=n=4:v=0:a=1[out]' -map '[out]' output.mp3"
     cnt = 0
     for i in range(0, len(fnames)):
@@ -65,7 +65,7 @@ def combineAllVoices(fnames, transitionFname):
     for i in range(0, cnt):
         command += "[" + str(i) + ":0]"
     command += "concat=n=" + str(cnt)
-    command += ":v=0:a=1[out]' -map '[out]' -threads 12 ALL_VOICES.mp3"
+    command += ":v=0:a=1[out]' -map '[out]' -threads 4 " + mp3Fname + ".mp3"
     print(command)
     subprocess.call('C:/Windows/system32/WindowsPowerShell/v1.0/powershell.exe ' + command, shell=True)
 
@@ -170,8 +170,12 @@ def grabAll(folderName, transitionName):
     fnames = []
     for dirName, subdirList, fileList in os.walk(folderName + '/mp3'):
         if( os.path.exists(dirName + "/ALL.mp3")):
-            fnames.append(dirName + "/ALL.mp3")
-    combineAllVoices(fnames, 't/' + transitionName + '.mp3')
+            if(dirName.find('\\title') > -1):
+                print('Title found')
+                fnames.insert(0, dirName + "/ALL.mp3")
+            else:
+                fnames.append(dirName + "/ALL.mp3")
+    combineAllVoices(fnames, 't/' + transitionName + '.mp3', folderName)
 
 
 def testVoice():
@@ -204,6 +208,31 @@ def getRedditPost(url):
     except:
         print("Unable to get reddit post")
         return ['','ERROR']
+
+def getRedditComments(url):
+    allComments = {}
+    topURL = url[0:len(url)-1] + '.json?sort=top'
+    bestURL = url[0:len(url)-1] + '.json?sort=best'
+    newURLs = [topURL, bestURL]
+    for curURL in newURLs:
+        r = requests.get(url = curURL,headers = {'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36	'}) 
+        data = json.loads(r.text)
+        #text = data['data']['children'][0]['data']['selftext'] + '\r\n'
+        if('error' in data):
+            print(data)
+            return ['','']
+        allComments['title'] = data[0]['data']['children'][0]['data']['title']
+        #titleFname = makeTitle(data[0]['data']['children'][0]['data']['permalink'].split('/')[5])
+        for commentObj in data[1]['data']['children']:
+            linkID = ''
+            if 'id' in commentObj['data']:
+                linkID = commentObj['data']['id']
+                if 'body' in commentObj['data']:
+                    text = cleanText(commentObj['data']['body'])
+                    #Has to be at least 10 words
+                    if(len(text.split(' ')) >= 10):
+                        allComments[linkID] = text
+    return allComments
 
 def cleanText(text):
     try:
@@ -239,6 +268,18 @@ def runList(folderName):
             open(folderName + '/txt/' + content[0] + '.txt', 'w', encoding='utf-8').write(content[1])
             saveAllVoices(folderName)
 
+def runComments(folderName, url):
+    if(not os.path.exists(folderName)):
+        os.mkdir(folderName)
+        os.mkdir(folderName + '/txt')
+        os.mkdir(folderName + '/mp3')
+    allComments = getRedditComments(url.strip())
+    for key,comment in allComments.items():
+        open(folderName + '/txt/' + key + '.txt', 'w', encoding='utf-8').write(comment)
+        saveAllVoices(folderName)
+        
+
+
 def getVoice(prevVoice):
     voiceList = list(voices)
     if prevVoice != '':
@@ -256,9 +297,14 @@ if action == 'get':
     folderName = sys.argv[2]
     runList(folderName)
     checkFiles(folderName)
+elif action == 'comments':
+    folderName = sys.argv[2]
+    url = sys.argv[3]
+    runComments(folderName, url)
+    grabAll(folderName, "whoosh")
 elif action == 'combine':
     folderName = sys.argv[2]
-    grabAll(folderName, "chimes")
+    grabAll(folderName, "whoosh")
 elif action == 'check':
     folderName = sys.argv[2]
     checkFiles(folderName)
