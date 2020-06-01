@@ -1,6 +1,13 @@
 import requests, sys, os, json, boto3, io, string, subprocess, time, random
 from os import path
+from pathlib import Path
+from pydub import AudioSegment
+import struct
+#print(struct.calcsize("P") * 8)
 
+# AudioSegment.converter = "C:\\ffmpeg\\bin\\ffmpeg.exe"
+# AudioSegment.ffmpeg = "C:\\ffmpeg\\bin\\ffmpeg.exe"
+# AudioSegment.ffprobe ="C:\\ffmpeg\\bin\\ffprobe.exe"
 
 def getKeys():
     return open('keys', 'r').readlines()
@@ -32,42 +39,47 @@ def saveAWS(voice, speechText, savePath):
         #print("Unable to save")
         return False
 
+def convert(inFname, outFname):
+    subprocess.call(['ffmpeg', '-i', inFname + '.wav', '-vn', '-ar', '44100', '-ac' , '2', '-b:a', '96k', outFname + '.mp3'])
+    os.remove(inFname + ".wav")
 
 def combineVoices(num, folderName):
-    command = "cd \"" + folderName + "\" ; "
-    command += "ffmpeg -i " #sample1.mp3 -i sample2.mp3 -i sample3.mp3 -i sample4.mp3 -filter_complex '[0:0][1:0][2:0][3:0]concat=n=4:v=0:a=1[out]' -map '[out]' output.mp3"
+    combined = AudioSegment.empty()
+    dirName = folderName + "/"
     for i in range(1, num + 1):
-        if(i == num):
-            command += "voice" + str(i) + '.mp3'
-        else:
-            command += "voice" + str(i) + '.mp3 -i '
-    command += " -filter_complex '"
-    for i in range(0, num):
-        command += "[" + str(i) + ":0]"
-    command += "concat=n=" + str(num)
-    command += ":v=0:a=1[out]' -map '[out]' ALL.mp3"
-    #$print(command)
-    subprocess.call('C:/Windows/system32/WindowsPowerShell/v1.0/powershell.exe ' + command, shell=True)
-    #os.system(command)
+        fname = dirName + "voice" + str(i) + '.mp3'
+        part = AudioSegment.from_mp3(fname)
+        combined += part
+    combined.export(dirName + "ALL.wav", format='wav')
+    subprocess.call(['ffmpeg', '-i', (dirName + "ALL.wav"), '-vn', '-ar', '44100', '-ac' , '2', '-b:a', '96k', (dirName + "ALL.mp3")])
+    os.remove((dirName + "ALL.wav"))
+
 
 def combineAllVoices(fnames, transitionFname, mp3Fname):
-    command = "ffmpeg -i " #sample1.mp3 -i sample2.mp3 -i sample3.mp3 -i sample4.mp3 -filter_complex '[0:0][1:0][2:0][3:0]concat=n=4:v=0:a=1[out]' -map '[out]' output.mp3"
-    cnt = 0
+    longTransition = 't/long.mp3'
+    combined = AudioSegment.empty()
+    outFnames = []
     for i in range(0, len(fnames)):
-        if(i == len(fnames)-1):
-            command += fnames[i]
-            cnt = cnt + 1
-        else:
-            command += fnames[i] +  ' -i '
-            command += transitionFname + ' -i '
-            cnt = cnt + 2
-    command += " -filter_complex '"
-    for i in range(0, cnt):
-        command += "[" + str(i) + ":0]"
-    command += "concat=n=" + str(cnt)
-    command += ":v=0:a=1[out]' -map '[out]' -threads 4 " + mp3Fname + ".mp3"
-    print(command)
-    subprocess.call('C:/Windows/system32/WindowsPowerShell/v1.0/powershell.exe ' + command, shell=True)
+        print("processing " + str(i+1) + " of " + str(len(fnames)))
+        part = AudioSegment.from_mp3(fnames[i])
+        transition = AudioSegment.from_mp3( transitionFname if i+1 < len(fnames) and fnames[i+1].find('title') == -1 else longTransition )
+        combined += part
+        if(i != len(fnames)-1):
+            combined += transition
+        if( (i % 100 == 0 or i == len(fnames)-1) and i != 0 ) :
+            partFname = mp3Fname + '/' + mp3Fname + str(i)
+            combined.export(partFname + '.wav', format='wav')
+            convert(partFname, partFname)
+            combined = AudioSegment.empty()
+            outFnames.append(partFname)
+    combined = AudioSegment.empty()
+    for i in range(0, len(outFnames)):
+        print("processing " + str(i+1) + " of " + str(len(outFnames)))
+        part = AudioSegment.from_mp3(outFnames[i] + '.mp3')
+        combined += part
+    combined.export(mp3Fname + ".wav", format='wav')
+    subprocess.call(['ffmpeg', '-i', mp3Fname + ".wav", '-vn', '-ar', '44100', '-ac' , '2', '-b:a', '96k', mp3Fname + ".mp3"])
+    os.remove(mp3Fname + ".wav")
 
 def printLink(listLinks, folderName):
     for link in listLinks:
@@ -110,25 +122,21 @@ def splitText(text, charLimit):
         return textList
 
 def splitAndSave(voice, allText, folderName, saveName):
-    try:
-        #Process 1000 char at a time.
-        saveFolder = folderName + "/" + saveName
-        if(not path.exists(folderName)):
-            return False
-        if(not path.exists(saveFolder)):
-            os.mkdir(saveFolder)
-        textList = splitText(allText , 1000)
-        cnt = 0
-        for curText in textList:
-            cnt = cnt + 1
-            fname = saveFolder + "/voice"  + str(cnt) + ".mp3"
-            if not saveAWS(voice, curText, fname):
-                return False
-        combineVoices(cnt, saveFolder)
-        return True
-    except:
-        print(sys.exc_info()[0])
+    #Process 1000 char at a time.
+    saveFolder = folderName + "/" + saveName
+    if(not path.exists(folderName)):
         return False
+    if(not path.exists(saveFolder)):
+        os.mkdir(saveFolder)
+    textList = splitText(allText , 1000)
+    cnt = 0
+    for curText in textList:
+        cnt = cnt + 1
+        fname = saveFolder + "/voice"  + str(cnt) + ".mp3"
+        if not saveAWS(voice, curText, fname):
+            return False
+    combineVoices(cnt, saveFolder)
+    return True
 
 def splitAndCheck(voice, allText, folderName, saveName):
     try:
@@ -155,26 +163,43 @@ def splitAndCheck(voice, allText, folderName, saveName):
 
 
 def saveAllVoices(folderName):
-    for dirName, subdirList, fileList in os.walk(folderName + '/txt'):
-        prevVoice = ''
-        for fname in fileList:
-            textFname = folderName + '/txt/' + fname
-            noExtFname = fname.replace('.txt', '')
-            if(not path.exists(folderName + '/mp3/' + noExtFname)):
-                prevVoice = getVoice(prevVoice)
-                content = open(textFname, 'r', encoding='utf-8').read()
-                content = cleanText(content)
-                splitAndSave(prevVoice, content, folderName + '/mp3', noExtFname)
+    prevVoice = ''
+        #    for fileList in sorted(folderName + '/txt').iterdir(), key=os.path.getmtime):#os.walk(folderName + '/txt'):
+    for fnamePath in sorted(Path(folderName + '/txt').iterdir(), key=os.path.getmtime):
+        fname = str(fnamePath)
+        print(fname)
+        #textFname = folderName + '/txt/' + fname
+        noExtFname = path.basename(fname).replace('.txt', '')
+        if(not path.exists(folderName + '/mp3/' + noExtFname)):
+            prevVoice = getVoice(prevVoice)
+            content = open(fname, 'r', encoding='utf-8').read()
+            content = cleanText(content)
+            splitAndSave(prevVoice, content, folderName + '/mp3', noExtFname)
 
 def grabAll(folderName, transitionName):
     fnames = []
-    for dirName, subdirList, fileList in os.walk(folderName + '/mp3'):
-        if( os.path.exists(dirName + "/ALL.mp3")):
-            if(dirName.find('\\title') > -1):
-                print('Title found')
-                fnames.insert(0, dirName + "/ALL.mp3")
-            else:
+    cnt = 0
+    if( os.path.exists(folderName + '/keys.txt')):
+        grabAllComments(folderName, transitionName)
+    else:
+        for dirNamePath in sorted(Path(folderName + '/mp3').iterdir(), key=os.path.getmtime):
+            dirName = str(dirNamePath)
+            if( os.path.exists(dirName + "/ALL.mp3")):
                 fnames.append(dirName + "/ALL.mp3")
+                cnt = cnt + 1
+        combineAllVoices(fnames, 't/' + transitionName + '.mp3', folderName)
+
+def grabAllComments(folderName, transitionName):
+    fnames = []
+    cnt = 0
+    keys = open(folderName + '/keys.txt', 'r').readlines()
+    for key in keys:
+        dirName = folderName + '/mp3/' + key.strip()
+        print(dirName)
+        if( os.path.exists(dirName + "/ALL.mp3")):
+            fnames.append(dirName + "/ALL.mp3")
+            cnt = cnt + 1
+    print(fnames)
     combineAllVoices(fnames, 't/' + transitionName + '.mp3', folderName)
 
 
@@ -221,7 +246,8 @@ def getRedditComments(url):
         if('error' in data):
             print(data)
             return ['','']
-        allComments['title'] = data[0]['data']['children'][0]['data']['title']
+        threadId = data[0]['data']['children'][0]['data']['name']
+        allComments['title_' + threadId] = data[0]['data']['children'][0]['data']['title']
         #titleFname = makeTitle(data[0]['data']['children'][0]['data']['permalink'].split('/')[5])
         for commentObj in data[1]['data']['children']:
             linkID = ''
@@ -231,7 +257,7 @@ def getRedditComments(url):
                     text = cleanText(commentObj['data']['body'])
                     #Has to be at least 10 words
                     if(len(text.split(' ')) >= 10):
-                        allComments[linkID] = text
+                        allComments[threadId + '_' + linkID] = text
     return allComments
 
 def cleanText(text):
@@ -268,15 +294,21 @@ def runList(folderName):
             open(folderName + '/txt/' + content[0] + '.txt', 'w', encoding='utf-8').write(content[1])
             saveAllVoices(folderName)
 
-def runComments(folderName, url):
+def runComments(folderName):
     if(not os.path.exists(folderName)):
         os.mkdir(folderName)
         os.mkdir(folderName + '/txt')
         os.mkdir(folderName + '/mp3')
-    allComments = getRedditComments(url.strip())
-    for key,comment in allComments.items():
-        open(folderName + '/txt/' + key + '.txt', 'w', encoding='utf-8').write(comment)
-        saveAllVoices(folderName)
+    listURLs = open('get.txt', 'r').readlines()
+    keys = []
+    for url in listURLs:
+        allComments = getRedditComments(url.strip())
+        for key,comment in allComments.items():
+            open(folderName + '/txt/' + key + '.txt', 'w', encoding='utf-8').write(comment)
+            keys.append(key + '\n')
+    listURLs = open('get.txt', 'r').readlines()
+    open(folderName + '/keys.txt', 'w').writelines(keys)
+    saveAllVoices(folderName)
         
 
 
@@ -288,8 +320,10 @@ def getVoice(prevVoice):
 
 
 #Usage
-#1. Get post - get <folder> <url>
-#2. Text to speech - speech <folder>
+#1. Run text to speech from posts of get.txt - get <folder> <url>
+#2. Run text to speech from comments of get.txt - comments <folder>
+#3. Combine if needed - combine <folder>
+#4. Check to make sure all files went through - check <folder> 
 
 action = sys.argv[1]
 
@@ -297,10 +331,10 @@ if action == 'get':
     folderName = sys.argv[2]
     runList(folderName)
     checkFiles(folderName)
+    grabAll(folderName, "whoosh")
 elif action == 'comments':
     folderName = sys.argv[2]
-    url = sys.argv[3]
-    runComments(folderName, url)
+    runComments(folderName)
     grabAll(folderName, "whoosh")
 elif action == 'combine':
     folderName = sys.argv[2]
