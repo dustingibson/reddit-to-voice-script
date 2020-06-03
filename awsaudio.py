@@ -80,6 +80,8 @@ def combineAllVoices(fnames, transitionFname, mp3Fname):
     combined.export(mp3Fname + ".wav", format='wav')
     subprocess.call(['ffmpeg', '-i', mp3Fname + ".wav", '-vn', '-ar', '44100', '-ac' , '2', '-b:a', '96k', mp3Fname + ".mp3"])
     os.remove(mp3Fname + ".wav")
+    for outFname in outFnames:
+        os.remove(outFname + ".mp3")
 
 def printLink(listLinks, folderName):
     for link in listLinks:
